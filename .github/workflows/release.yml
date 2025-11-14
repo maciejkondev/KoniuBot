@@ -19,7 +19,6 @@ jobs:
       - name: Install Ollama
         run: |
           curl -fsSL https://ollama.com/install.sh | sh
-
       - name: Pull Llama 3B
         run: ollama pull llama3.2:3b
 
@@ -27,8 +26,6 @@ jobs:
         id: commits
         run: |
           git fetch --tags --force
-
-          # Read ONLY version-like tags (X.Y.Z)
           tags=($(git ls-remote --tags origin \
             | awk '{print $2}' \
             | sed 's|refs/tags/||' \
@@ -39,50 +36,40 @@ jobs:
           printf '%s\n' "${tags[@]}"
 
           if [ ${#tags[@]} -lt 2 ]; then
-            echo "Not enough tags to compare."
-            exit 1
+            echo "Only one tag detected – skipping release notes generation."
+            echo "" > release_notes.md
+            exit 0
           fi
 
           previous=${tags[-2]}
           current=${tags[-1]}
-
           echo "Previous tag: $previous"
           echo "Current tag : $current"
 
-          ### NEW — Print GitHub compare link
           echo ""
           echo "### 🔍 GitHub Compare URL"
           echo "https://github.com/${GITHUB_REPOSITORY}/compare/$previous...$current"
           echo ""
 
-          ### NEW — Save full commit diffs with hashes
           git log "$previous..$current" --pretty=format:"%h %s" > commits_full.txt
-
-          echo "### Commits with hashes:"
           cat commits_full.txt
-          echo ""
 
-          # Save messages only for AI
           git log "$previous..$current" --pretty=format:"- %s" > commits.txt
-
-          echo "--- Commit messages collected for AI ---"
           cat commits.txt
-          echo ""
 
-      - name: Upload commit comparison artifact ### NEW
+      - name: Upload commit comparison artifact
+        if: hashFiles('commits_full.txt') != ''
         uses: actions/upload-artifact@v4
         with:
           name: commit_diff
           path: commits_full.txt
 
       - name: Generate release notes using Llama 3B
+        if: hashFiles('commits.txt') != ''
         run: |
           commits=$(cat commits.txt)
-
           prompt="Convert the following commit messages into structured GitHub release notes:
-
           $commits
-
           Requirements:
           - Use clean GitHub Markdown
           - Group into: Features, Fixes, Improvements, GUI, Build, Misc
@@ -94,8 +81,6 @@ jobs:
           - Text only inside sections"
 
           ollama run llama3.2:3b "$prompt" > release_notes.md
-
-          echo "--- AI Generated Release Notes ---"
           cat release_notes.md
 
       - name: Upload release notes artifact
@@ -103,6 +88,7 @@ jobs:
         with:
           name: release_notes
           path: release_notes.md
+
 
   build:
     runs-on: windows-latest
