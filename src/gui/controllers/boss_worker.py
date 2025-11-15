@@ -3,7 +3,7 @@ Boss detection worker using QThread for non-blocking image recognition and autom
 Refactored from standalone boss farming script into modular QThread-based worker.
 """
 
-import pyautogui
+import dxcam
 import cv2
 import numpy as np
 import time
@@ -12,6 +12,7 @@ from PySide6.QtCore import QThread, Signal
 import os
 import sys
 from pynput.keyboard import Controller, Key
+from pynput.mouse import Controller as MouseController, Button
 
 
 class BossDetectionWorker(QThread):
@@ -100,8 +101,18 @@ class BossDetectionWorker(QThread):
         self.template_height, self.template_width = self.template_gray.shape
         self.status_changed.emit(f"Template loaded: {template_path}")
 
-        # Keyboard controller for pynput
+        # Keyboard and mouse controllers for pynput
         self.keyboard = Controller()
+        self.mouse = MouseController()
+        
+        # DXcam screenshot capture
+        try:
+            self.camera = dxcam.create(output_idx=0, region=None)
+            if self.camera is None:
+                raise Exception("DXcam failed to initialize")
+        except Exception as e:
+            self.status_changed.emit(f"WARNING: DXcam initialization failed: {e}")
+            self.camera = None
 
         # Default preview frame
         self.last_frame = np.zeros((200, 200, 3), dtype=np.uint8)
@@ -206,8 +217,18 @@ class BossDetectionWorker(QThread):
         """
         try:
             region = self.config.get("region", (250, 120, 260, 215))
-            screenshot = pyautogui.screenshot(region=region)
-            screenshot = np.array(screenshot)
+            left, top, width, height = region
+            
+            # Capture screenshot using DXcam
+            if self.camera is None:
+                self.status_changed.emit("ERROR: DXcam not initialized")
+                return False
+            
+            screenshot = self.camera.grab(region=(left, top, left + width, top + height))
+            if screenshot is None:
+                self.status_changed.emit("ERROR: Failed to capture screenshot")
+                return False
+            
             screenshot_bgr = cv2.cvtColor(screenshot, cv2.COLOR_RGB2BGR)
             gray_screenshot = cv2.cvtColor(screenshot_bgr, cv2.COLOR_BGR2GRAY)
 
@@ -280,19 +301,18 @@ class BossDetectionWorker(QThread):
                     f"Found target (confidence: {max_val:.3f}) - clicking"
                 )
 
-                # Perform clicks and key presses
-                pyautogui.moveTo(click_x, click_y)
-                pyautogui.click()
+                # Perform mouse click and key presses using pynput
+                self.mouse.position = (click_x, click_y)
+                self.mouse.click(Button.left, 1)
 
                 # record that we clicked this center; if it persists beyond timeout we'll mark unavailable
                 self.last_clicked_center = center
                 self.last_click_time = time.time()
 
                 try:
-                    self._press_key("F4")
+                    self._press_hotkey_combo("F4", None)
                     time.sleep(0.1)
-                    self._release_key("F4")
-                    self._press_key("SPACEBAR")
+                    self._press_hotkey_combo("space", None)
                 except Exception as e:
                     self.status_changed.emit(f"Key press error: {str(e)}")
 
@@ -388,8 +408,8 @@ class BossDetectionWorker(QThread):
         self.status_changed.emit(f"Performing periodic swaps at {len(y_positions)} positions")
 
         for cy in y_positions:
-            pyautogui.moveTo(x, cy)
-            pyautogui.click()
+            self.mouse.position = (x, cy)
+            self.mouse.click(Button.left, 1)
             time.sleep(0.1)
 
         self.last_swap_time = time.time()
@@ -440,26 +460,11 @@ class BossDetectionWorker(QThread):
             time.sleep(0.02)
 
     @staticmethod
-    def _press_key(key: str):
-        """Press a key using pyautogui."""
-        # Map common key names to pyautogui format
-        key_map = {
-            "LSHIFT": "shift",
-            "SPACEBAR": "space",
-        }
-        key = key_map.get(key, key.lower())
-        pyautogui.press(key)
-
-    @staticmethod
-    def _release_key(key: str):
-        """Release a key (pyautogui doesn't have explicit release for press())."""
-        pass
-
-    @staticmethod
     def _release_space_safely():
-        """Safely release space key."""
+        """Safely release space key using pynput."""
         try:
-            pyautogui.keyUp("space")
+            keyboard = Controller()
+            keyboard.release(Key.space)
         except Exception:
             pass
 

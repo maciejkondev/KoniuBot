@@ -4,6 +4,7 @@ Boss farming manager to orchestrate detection workers and farming logic.
 
 import json
 import os
+import sys
 from typing import Optional, Dict, Any
 
 
@@ -58,11 +59,23 @@ class BossFarmingConfig:
         Args:
             config_path: Path to JSON configuration file
         """
+        # Handle frozen bundle paths
+        if getattr(sys, "frozen", False):
+            # Running as EXE - resolve path from bundle
+            base_path = sys._MEIPASS
+            if not os.path.isabs(config_path):
+                config_path = os.path.join(base_path, config_path)
+        
         self.config_path = config_path
         self.config = self._load_or_create_config()
 
     def _load_or_create_config(self) -> Dict[str, Any]:
         """Load config from file or create default if missing."""
+        # Ensure directory exists
+        config_dir = os.path.dirname(self.config_path)
+        if config_dir:
+            os.makedirs(config_dir, exist_ok=True)
+        
         if os.path.exists(self.config_path):
             try:
                 with open(self.config_path, "r") as f:
@@ -72,8 +85,11 @@ class BossFarmingConfig:
                 print("Using default configuration")
 
         # Create default config
-        os.makedirs(os.path.dirname(self.config_path), exist_ok=True)
-        self._save_config(self.DEFAULT_CONFIG)
+        try:
+            self._save_config(self.DEFAULT_CONFIG)
+        except Exception as e:
+            print(f"Warning: Could not save default config: {e}")
+        
         return self.DEFAULT_CONFIG.copy()
 
     def _save_config(self, config: Dict[str, Any]):
